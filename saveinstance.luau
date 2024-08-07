@@ -81,6 +81,9 @@ do
 		getscriptbytecode = 'string.find(...,"get",nil,true) and string.find(...,"bytecode",nil,true)', --  or string.find(...,"dump",nil,true) and string.find(...,"string",nil,true) due to Fluxus (dumpstring returns a function)
 		hash = 'local a={...}local b=a[1]local function c(a,b)return string.find(a,b,nil,true)end;return c(b,"hash")and c(string.lower(tostring(a[2])),"crypt")',
 		protectgui = 'string.find(...,"protect",nil,true) and string.find(...,"ui",nil,true) and not string.find(...,"un",nil,true)',
+		-- appendfile = 'string.find(...,"file",nil,true) and string.find(...,"append",nil,true)',
+		readfile = 'string.find(...,"file",nil,true) and string.find(...,"read",nil,true)',
+		writefile = 'string.find(...,"file",nil,true) and string.find(...,"write",nil,true)',
 		setthreadidentity = 'string.find(...,"identity",nil,true) and string.find(...,"set",nil,true)',
 	}, true, 10)
 end
@@ -90,23 +93,13 @@ local identify_executor = identifyexecutor or getexecutorname or whatexecutor
 local EXECUTOR_NAME = identify_executor()
 
 local gethiddenproperty = global_container.gethiddenproperty
-
--- These should be universal enough
-local appendfile = appendfile
-local readfile = readfile
-local writefile = writefile
+-- local appendfile = global_container.appendfile
+local readfile = global_container.readfile
+local writefile = global_container.writefile
 
 local getscriptbytecode = global_container.getscriptbytecode -- * A lot of assumptions are made based on whether this function is defined or not. So in certain edge cases, like if the executor defines "decompile" or "getscripthash" function yet doesn't define this function there might be loss of functionality of the saveinstance. Although that would be very rare and weird
 local base64encode = global_container.base64encode
 local sha384
-
-if not gethiddenproperty or EXECUTOR_NAME == "Celery" then -- ? Celery Fix
-	local UGCValidationService = service.UGCValidationService
-
-	gethiddenproperty = function(instance, property_name)
-		return UGCValidationService:GetPropertyValue(instance, property_name) -- :)
-	end
-end
 
 if not base64encode then
 	if not bit32.byteswap or not pcall(bit32.byteswap, 1) then -- Because Fluxus is missing byteswap
@@ -843,8 +836,8 @@ do
 		-- * You can also use: https://setup.rbxcdn.com/{https://setup.rbxcdn.com/versionQTStudio}-Full-API-Dump.json
 		-- * https://setup.rbxcdn.com/versionQTStudio seems to be a bit behind DeployHistory.txt
 		local API_Dump
-
-		local ok, err = pcall(function()
+		if
+			not pcall(function()
 				local VERSIONS = version()
 
 				local o, r = pcall(readfile, VERSIONS)
@@ -871,10 +864,8 @@ do
 
 				writefile(VERSIONS, API_Dump) -- ? To avoid 60 requests / 1 h limit on GitHub Api
 			end)
-
-		if not ok then
+		then
 			warn("Failed to get " .. version() .. " API Dump, trying latest..")
-			warn(err)
 			API_Dump = game:HttpGet(
 				"https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Mini-API-Dump.json",
 				true
@@ -980,7 +971,7 @@ local GLOBAL_ENV = getgenv and getgenv() or _G or shared
 --- @field __DEBUG_MODE boolean -- Recommended to enable if you wish to help us improve our products and find bugs / issues with it! ___Default:___ false
 --- @field ReadMe boolean --___Default:___ true
 --- @field SafeMode boolean -- Kicks you before Saving, which prevents you from being detected in any game. ___Default:___ false
---- @field Anonymous boolean -- * **RISKY:** Cleans the file of any info related to your account like: Name, UserId. This is useful for some games that might store that info in GUIs or other Instances. Might potentially mess up parts of strings that contain characters that match your Name or parts of numbers that match your UserId. ___Default:___ false
+--- @field Anonymous boolean -- Cleans the file of any info related to your account like: Name, UserId. This is useful for some games that might store that info in GUIs or other Instances. ___Default:___ false
 --- @field ShowStatus boolean -- ___Default:___ true
 --- @field mode string -- Change this to invalid mode like "invalid" if you only want ExtraInstances. "optimized" mode is **NOT** supported with *@Object* option. ___Default:___ `"optimized"`
 --- @field noscripts boolean -- ___Aliases:___ `Decompile`. ___Default:___ false
@@ -1391,14 +1382,12 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 		},
 	}
 
-	local function GetAlias(searchAlias)
+	local function CheckAlias(searchAlias)
 		for option, alias in OPTIONS.OptionsAliases do
 			if searchAlias == alias then
 				return option
 			end
 		end
-
-		return ""
 	end
 
 	do -- * Load Settings
@@ -1468,7 +1457,7 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 			else
 				for key, value in CustomOptions do
 					if OPTIONS[key] == nil then
-						local Option = GetAlias(key)
+						local Option = CheckAlias(key)
 
 						if Option then
 							OPTIONS[Option] = value
@@ -1570,14 +1559,6 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 		enablenilinstances()
 	end
 
-	if
-		#service.StarterGui:GetChildren() == 0
-		and CustomOptions.IsolateLocalPlayer == nil
-		and CustomOptions[GetAlias("IsolateLocalPlayer")] == nil
-	then
-		OPTIONS.IsolateLocalPlayer = true -- * QoL
-	end
-
 	local SaveBytecode
 	if OPTIONS.SaveBytecode and getscriptbytecode then
 		SaveBytecode = function(script)
@@ -1638,8 +1619,11 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 					"NilInstances",
 				}
 			do
-				if CustomOptions[key] == nil and CustomOptions[GetAlias(key)] == nil then
-					OPTIONS[key] = false
+				if CustomOptions[key] == nil then
+					local Option = CheckAlias(key)
+					if CustomOptions[Option] == nil then
+						OPTIONS[key] = false
+					end
 				end
 			end
 
@@ -1756,12 +1740,11 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 			Loading = task.spawn(function()
 				local spinner_count = 0
 				local chars = { "|", "/", "—", "\\" }
-				local chars_size = #chars
 
 				local function getLoadingText()
 					spinner_count += 1
 
-					if chars_size < spinner_count then
+					if #chars < spinner_count then
 						spinner_count = 1
 					end
 
@@ -1838,7 +1821,7 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 		-- if Decompiler == custom_decompiler then -- Cope
 		-- 	local key = "DecompileTimeout"
 		-- 	if CustomOptions[key] == nil then
-		-- 		local Option = GetAlias(key)
+		-- 		local Option = CheckAlias(key)
 		-- 		if CustomOptions[Option] == nil then
 		-- 			Timeout = 1
 		-- 		end
@@ -2096,6 +2079,10 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 
 			local ClassName = instance.ClassName
 
+			if ClassName == "" then -- * FilteredSelection
+				ClassName = "Folder"
+			end
+
 			local InstanceName = instance.Name
 
 			do
@@ -2163,10 +2150,6 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 				InstanceOverride = InstancePropertyOverrides[instance]
 			end
 			local ChildrenOverride = InstanceOverride and InstanceOverride.__Children
-
-			if ClassName == "" then -- * FilteredSelection
-				ClassName = "Folder"
-			end
 
 			-- ? The reason we only save .Name (and few other props in save_specific) is because
 			-- ? we can be sure this is a custom container (ex. NilInstancesFixes)
@@ -2671,34 +2654,27 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 				totalstr = string.gsub(string.gsub(totalstr, LocalPlayer.UserId, "1"), LocalPlayer.Name, "Roblox")
 			end
 
-			if EXECUTOR_NAME ~= "Celery" then
-				run_with_loading(
-					"Writing " .. get_size_format() .. " to File (Depends on Exec)",
-					nil,
-					true,
-					writefile,
-					placename,
-					totalstr
-				)
-			else
-				local SegmentLength = 4145728 -- Celery has an arbitrary savefile/appendfile size limit of ~4MB for reasons unknown. This is a workaround to save the file in segments.
-				local Length = math.ceil(totalsize / SegmentLength)
+			-- if EXECUTOR_NAME ~= "Celery" then
+			run_with_loading(
+				"Writing " .. get_size_format() .. " to File (Depends on Exec)",
+				nil,
+				true,
+				writefile,
+				placename,
+				totalstr
+			)
+			-- else
+			-- 	local SegmentLength = 4145728 -- Celery has an arbitrary savefile/appendfile size limit of ~4MB for reasons unknown. This is a workaround to save the file in segments.
 
-				for i = 1, Length do
-					local savestr = string.sub(totalstr, (i - 1) * SegmentLength + 1, i * SegmentLength)
+			-- 	local Length = math.ceil(totalsize / SegmentLength)
 
-					run_with_loading(
-						"Writing to File " .. math.round(i / Length * 100) .. "% (Depends on Exec)",
-						nil,
-						true,
-						appendfile,
-						placename,
-						savestr
-					)
-
-					task.wait(0.1)
-				end
-			end
+			-- 	for i = 1, Length do
+			-- 		local savestr = string.sub(totalstr, (i - 1) * SegmentLength, i * SegmentLength)
+			-- 		StatusText.Text = "Writing to file... " .. math.round(i / Length * 100) .. "%"
+			-- 		appendfile(placename, savestr)
+			-- 		task.wait(1)
+			-- 	end
+			-- end
 		end
 		table.clear(SharedStrings)
 	end
